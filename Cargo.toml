@@ -1,0 +1,15 @@
+[package]
+name = "bbcode_parser"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bbcode_parser"
+path = "src/lib.rs"
+
+[dependencies]
+pest = "2.5"
+pest_derive = "2.5"
+regex = "1.7"
+thiserror = "2.0"
+once_cell = "1.2"

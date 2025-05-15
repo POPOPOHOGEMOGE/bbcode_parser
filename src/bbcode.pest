@@ -1,0 +1,21 @@
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" } 
+
+BBCode = { SOI ~ content* ~ EOI }
+
+content = { tag_block | escaped_bracket | text }
+
+tag_block = {
+    "[" ~ tag_name ~ tag_attr? ~ "]" ~ content* ~ "[/" ~ close_tag_name ~ "]"
+}
+
+tag_name = @{ (!("=" | "]" | "/" | WHITESPACE) ~ ANY)+ }
+
+close_tag_name = @{ (!("]" | WHITESPACE) ~ ANY)+ }
+
+tag_attr = @{ "=" ~ (!"]" ~ ANY)* }
+
+escaped_bracket = @{ "\\" ~ "[" }
+
+text = @{
+    (!"[" ~ ANY)+
+}
