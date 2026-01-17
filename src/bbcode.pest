@@ -1,9 +1,13 @@
 BBCode = { SOI ~ content* ~ EOI }
 
-content = { tag_block | escaped_bracket | text }
+content = { tag_block | unclosed_tag | escaped_bracket | text }
 
 tag_block = {
     "[" ~ tag_name ~ tag_attr? ~ "]" ~ content* ~ "[/" ~ close_tag_name ~ "]"
+}
+
+unclosed_tag = {
+   "[" ~ tag_name ~ tag_attr? ~ "]"
 }
 
 tag_name = @{ (!("=" | "]" | "/" | " " | "\t" | "\n" | "\r") ~ ANY)+ }

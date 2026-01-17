@@ -326,18 +326,31 @@ fn test_newline_to_br() {
 }
 
 #[test]
-fn test_pest_parse_error() {
+fn test_unclosed_tag_fallback() {
     let opts = BbCodeOptions::default();
-    // 閉じタグなし => Pestのルール上パースエラーが発生
     let input = "[b]Unclosed bold";
-    let result = parse_bbcode_to_ast(input, &opts);
 
-    match result {
-        Err(BbCodeError::PestError(_)) => {
-            // Pestエラーとして処理
-        }
-        _ => panic!("Expected PestError for unclosed tag"),
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
+    // normalize_text_nodes があるので 1ノードにまとまる
+    assert_eq!(ast.len(), 1);
+    match &ast[0] {
+        Node::Text(raw) => assert_eq!(raw, input),
+        _ => panic!("Expected Text fallback for unclosed tag"),
     }
+}
+
+#[test]
+fn test_unclosed_tag_does_not_break_following_tags() {
+    let opts = BbCodeOptions::default();
+    let input = "[b]hello [i]world[/i]";
+
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+    // 期待：先頭の [b] は Text 化、[i]...[/i] は生きる
+    // ただし normalize で Text がまとまる可能性あり
+
+    let html = ast_to_html(&ast);
+    assert_eq!(html, "[b]hello <i>world</i>");
 }
 
 #[test]
@@ -379,6 +392,19 @@ fn test_empty_tag_content() {
             );
         }
         _ => panic!("Expected Element(b) node"),
+    }
+}
+
+#[test]
+fn test_pest_parse_error_for_lone_bracket() {
+    let opts = BbCodeOptions::default();
+    let input = "["; // unclosed_tag にも text にもならない
+
+    let result = parse_bbcode_to_ast(input, &opts);
+
+    match result {
+        Err(BbCodeError::PestError(_)) => {}
+        _ => panic!("Expected PestError for lone '['"),
     }
 }
 
@@ -511,6 +537,13 @@ impl<'a> BuildAstContext<'a> {
                 }
 
                 Ok(vec![Node::Element(elem)])
+            }
+
+            Rule::unclosed_tag => {
+                // 開始タグのみで閉じタグがないケースはその部分を丸ごとテキストへ
+                // DoS耐性としてタグ数制限の対象に含める
+                self.on_tag()?;
+                Ok(vec![Node::Text(pair.as_str().to_string())])
             }
 
             Rule::escaped_bracket => Ok(vec![Node::Text("[".to_string())]),
@@ -674,10 +707,14 @@ fn replace_newline_with_br(input: &str) -> String {
 ////////////////////
 BBCode = { SOI ~ content* ~ EOI }
 
-content = { tag_block | escaped_bracket | text }
+content = { tag_block | unclosed_tag | escaped_bracket | text }
 
 tag_block = {
     "[" ~ tag_name ~ tag_attr? ~ "]" ~ content* ~ "[/" ~ close_tag_name ~ "]"
+}
+
+unclosed_tag = {
+   "[" ~ tag_name ~ tag_attr? ~ "]"
 }
 
 tag_name = @{ (!("=" | "]" | "/" | " " | "\t" | "\n" | "\r") ~ ANY)+ }

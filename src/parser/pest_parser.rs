@@ -125,6 +125,13 @@ impl<'a> BuildAstContext<'a> {
                 Ok(vec![Node::Element(elem)])
             }
 
+            Rule::unclosed_tag => {
+                // 開始タグのみで閉じタグがないケースはその部分を丸ごとテキストへ
+                // DoS耐性としてタグ数制限の対象に含める
+                self.on_tag()?;
+                Ok(vec![Node::Text(pair.as_str().to_string())])
+            }
+
             Rule::escaped_bracket => Ok(vec![Node::Text("[".to_string())]),
             Rule::text => Ok(vec![Node::Text(pair.as_str().to_string())]),
             Rule::EOI => Ok(vec![]),

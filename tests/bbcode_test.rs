@@ -160,18 +160,31 @@ fn test_newline_to_br() {
 }
 
 #[test]
-fn test_pest_parse_error() {
+fn test_unclosed_tag_fallback() {
     let opts = BbCodeOptions::default();
-    // 閉じタグなし => Pestのルール上パースエラーが発生
     let input = "[b]Unclosed bold";
-    let result = parse_bbcode_to_ast(input, &opts);
 
-    match result {
-        Err(BbCodeError::PestError(_)) => {
-            // Pestエラーとして処理
-        }
-        _ => panic!("Expected PestError for unclosed tag"),
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
+    // normalize_text_nodes があるので 1ノードにまとまる
+    assert_eq!(ast.len(), 1);
+    match &ast[0] {
+        Node::Text(raw) => assert_eq!(raw, input),
+        _ => panic!("Expected Text fallback for unclosed tag"),
     }
+}
+
+#[test]
+fn test_unclosed_tag_does_not_break_following_tags() {
+    let opts = BbCodeOptions::default();
+    let input = "[b]hello [i]world[/i]";
+
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+    // 期待：先頭の [b] は Text 化、[i]...[/i] は生きる
+    // ただし normalize で Text がまとまる可能性あり
+
+    let html = ast_to_html(&ast);
+    assert_eq!(html, "[b]hello <i>world</i>");
 }
 
 #[test]
@@ -213,5 +226,18 @@ fn test_empty_tag_content() {
             );
         }
         _ => panic!("Expected Element(b) node"),
+    }
+}
+
+#[test]
+fn test_pest_parse_error_for_lone_bracket() {
+    let opts = BbCodeOptions::default();
+    let input = "["; // unclosed_tag にも text にもならない
+
+    let result = parse_bbcode_to_ast(input, &opts);
+
+    match result {
+        Err(BbCodeError::PestError(_)) => {}
+        _ => panic!("Expected PestError for lone '['"),
     }
 }
