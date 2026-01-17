@@ -1,0 +1,714 @@
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\src\ast.rs
+////////////////////
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Node {
+    Text(String),
+    Element(Element),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Element {
+    pub name: String,
+    pub attrs: Vec<(String, String)>,
+    pub children: Vec<Node>,
+}
+
+impl Element {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            attrs: vec![],
+            children: vec![],
+        }
+    }
+
+    pub fn with_attr(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.attrs.push((key.into(), value.into()));
+        self
+    }
+
+    pub fn with_children(mut self, children: Vec<Node>) -> Self {
+        self.children = children;
+        self
+    }
+}
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\src\error.rs
+////////////////////
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum BbCodeError {
+    #[error("Input size exceeded limit (max {max_size} bytes)")]
+    InputSizeExceeded { max_size: usize, actual_size: usize },
+
+    #[error("Parsed tag count exceeded limit (max {max_tags})")]
+    TagCountExceeded { max_tags: usize },
+
+    #[error("Nest depth exceeded limit (max {max_depth}). Near: \"{near}\"")]
+    NestDepthExceeded { max_depth: usize, near: String },
+
+    #[error("Failed to parse input: {0}")]
+    PestError(#[from] pest::error::Error<crate::parser::Rule>),
+}
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\src\lib.rs
+////////////////////
+pub mod ast;
+pub mod error;
+pub mod options;
+pub mod registry;
+
+pub mod parser;
+pub mod render;
+
+pub use ast::{Element, Node};
+pub use error::BbCodeError;
+pub use options::BbCodeOptions;
+
+pub use parser::parse_bbcode_to_ast;
+pub use render::ast_to_html;
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\src\options.rs
+////////////////////
+#[derive(Debug, Clone)]
+pub struct BbCodeOptions {
+    pub max_depth: usize,
+    pub max_tags: usize,
+    pub max_input_size: usize,
+}
+
+impl Default for BbCodeOptions {
+    fn default() -> Self {
+        Self {
+            max_depth: 3,
+            max_tags: 500,
+            max_input_size: 50 * 1024,
+        }
+    }
+}
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\src\parser.rs
+////////////////////
+pub mod pest_parser;
+pub use pest_parser::{parse_bbcode_to_ast, Rule};
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\src\registry.rs
+////////////////////
+use once_cell::sync::Lazy;
+use regex::Regex;
+
+#[derive(Debug, Clone)]
+pub struct TagSpec {
+    /// `[color=xxx]` のように 1つの “値属性” を許可するか
+    pub allow_value_attr: bool,
+    /// 値属性を検証する（colorのようなケース）
+    pub validate_value_attr: Option<fn(&str) -> bool>,
+}
+
+impl TagSpec {
+    pub fn simple() -> Self {
+        Self {
+            allow_value_attr: false,
+            validate_value_attr: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TagRegistry;
+
+impl TagRegistry {
+    /// “このタグは何か？”（仕様）を返す
+    pub fn get(tag_name: &str) -> Option<TagSpec> {
+        match tag_name.to_ascii_lowercase().as_str() {
+            "b" => Some(TagSpec::simple()),
+            "i" => Some(TagSpec::simple()),
+            "color" => Some(TagSpec {
+                allow_value_attr: true,
+                validate_value_attr: Some(is_valid_color_value),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// 英字 or #RGB or #RRGGBB
+fn is_valid_color_value(s: &str) -> bool {
+    static COLOR_RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"^([A-Za-z]+|#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?)$")
+            .expect("color regex must be valid")
+    });
+    COLOR_RE.is_match(s.trim())
+}
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\src\render.rs
+////////////////////
+pub mod html;
+pub use html::ast_to_html;
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\tests\bbcode_test.rs
+////////////////////
+use bbcode_parser::{ast_to_html, parse_bbcode_to_ast, BbCodeError, BbCodeOptions, Node};
+
+#[test]
+fn test_basic_parse() {
+    let opts = BbCodeOptions::default();
+    let ast = parse_bbcode_to_ast("[b]Bold[/b]", &opts).unwrap();
+    assert_eq!(ast.len(), 1);
+
+    // 最初のノードが Bold であることを確認
+    match &ast[0] {
+        Node::Element(el) => {
+            assert_eq!(el.name, "b");
+            assert_eq!(el.children.len(), 1);
+            assert_eq!(el.children[0], Node::Text("Bold".to_string()));
+        }
+        _ => panic!("Expected Bold node"),
+    }
+}
+
+#[test]
+fn test_color_valid() {
+    let opts = BbCodeOptions::default();
+    let input = "[color=red]赤文字[/color]";
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+    assert_eq!(ast.len(), 1);
+
+    match &ast[0] {
+        Node::Element(el) => {
+            assert_eq!(el.name, "color");
+            assert_eq!(el.attrs.len(), 1);
+            assert_eq!(el.attrs[0].0, "value");
+            assert_eq!(el.attrs[0].1, "red");
+            assert_eq!(el.children.len(), 1);
+        }
+        _ => panic!("Expected Color node"),
+    }
+}
+
+#[test]
+fn test_color_invalid() {
+    let opts = BbCodeOptions::default();
+    let input = "[color=javascript:alert(1)]hack[/color]";
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+    // xssが疑われる不正な color は UnknownTag として扱う
+    match &ast[0] {
+        Node::Text(raw) => {
+            assert!(raw.contains("hack"), "Should contain original text");
+            assert!(
+                raw.contains("javascript"),
+                "Should keep original invalid value"
+            );
+        }
+        _ => panic!("Expected UnknownTag for invalid color"),
+    }
+}
+
+#[test]
+fn test_nest_depth_exceeded() {
+    let opts = BbCodeOptions {
+        max_depth: 2,
+        ..Default::default()
+    };
+    // 3階層のネスト
+    let input = "[b][i][color=red]Nested[/color][/i][/b]";
+    let result = parse_bbcode_to_ast(input, &opts);
+
+    match result {
+        Err(BbCodeError::NestDepthExceeded { max_depth, near }) => {
+            assert_eq!(max_depth, 2);
+            // どのタグ付近で落ちたかは実装依存になり得るので、最低限の確認に留める
+            assert!(
+                near.contains("["),
+                "near should contain some tag-related snippet"
+            );
+        }
+        _ => panic!("Expected NestDepthExceeded error"),
+    }
+}
+
+#[test]
+fn test_generate_html() {
+    let opts = BbCodeOptions::default();
+    let ast = parse_bbcode_to_ast("[b]Bold[/b]", &opts).unwrap();
+    let html = ast_to_html(&ast);
+    assert_eq!(html, "<b>Bold</b>");
+}
+
+#[test]
+fn test_input_size_exceeded() {
+    let opts = BbCodeOptions {
+        max_input_size: 10, // 10byte
+        ..Default::default()
+    };
+    let long_input = "a".repeat(50); // 50byte
+    let result = parse_bbcode_to_ast(&long_input, &opts);
+    match result {
+        Err(BbCodeError::InputSizeExceeded {
+            max_size,
+            actual_size,
+        }) => {
+            assert_eq!(max_size, 10);
+            assert_eq!(actual_size, 50);
+        }
+        _ => panic!("Expected InputSizeExceeded error"),
+    }
+}
+
+#[test]
+fn test_tag_count_exceeded() {
+    let opts = BbCodeOptions {
+        max_tags: 2,
+        ..Default::default()
+    };
+    // 3つのタグ
+    let input = "[b][i][color=red]three tags[/color][/i][/b]";
+    let result = parse_bbcode_to_ast(input, &opts);
+    match result {
+        Err(BbCodeError::TagCountExceeded { max_tags }) => {
+            assert_eq!(max_tags, 2);
+        }
+        _ => panic!("Expected TagCountExceeded error"),
+    }
+}
+
+#[test]
+fn test_mismatched_tags() {
+    let opts = BbCodeOptions::default();
+    // [b]...[/i] のように異なるタグ名で閉じる
+    let input = "[b]Hello[/i]";
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
+    // 不整合時はフォールバックで UnknownTag になる
+    assert_eq!(ast.len(), 1);
+    match &ast[0] {
+        Node::Text(raw) => {
+            assert!(raw.contains("Hello"));
+            assert!(raw.contains("[b]"));
+            assert!(raw.contains("[/i]"));
+        }
+        _ => panic!("Expected UnknownTag for mismatched tags"),
+    }
+}
+
+#[test]
+fn test_newline_to_br() {
+    let opts = BbCodeOptions::default();
+    let input = "Hello\nWorld";
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
+    // ASTは 1ノード (Text("Hello\nWorld"))
+    assert_eq!(ast.len(), 1);
+    match &ast[0] {
+        Node::Text(txt) => assert_eq!(txt, "Hello\nWorld"),
+        _ => panic!("Expected a single Text node"),
+    }
+
+    // HTML化すると改行が <br> に
+    let html = ast_to_html(&ast);
+    assert_eq!(html, "Hello<br>World");
+}
+
+#[test]
+fn test_pest_parse_error() {
+    let opts = BbCodeOptions::default();
+    // 閉じタグなし => Pestのルール上パースエラーが発生
+    let input = "[b]Unclosed bold";
+    let result = parse_bbcode_to_ast(input, &opts);
+
+    match result {
+        Err(BbCodeError::PestError(_)) => {
+            // Pestエラーとして処理
+        }
+        _ => panic!("Expected PestError for unclosed tag"),
+    }
+}
+
+#[test]
+fn test_color_hash_six_digits() {
+    let opts = BbCodeOptions::default();
+    let input = "[color=#123ABC]Test[/color]";
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
+    assert_eq!(ast.len(), 1);
+    match &ast[0] {
+        Node::Element(el) => {
+            assert_eq!(el.name, "color");
+            assert_eq!(el.attrs.len(), 1);
+            assert_eq!(el.attrs[0].0, "value");
+            assert_eq!(el.attrs[0].1, "#123ABC");
+            assert_eq!(el.children.len(), 1);
+            match &el.children[0] {
+                Node::Text(txt) => assert_eq!(txt, "Test"),
+                _ => panic!("Expected Text inside color"),
+            }
+        }
+        _ => panic!("Expected Element(color) node"),
+    }
+}
+
+#[test]
+fn test_empty_tag_content() {
+    let opts = BbCodeOptions::default();
+    let input = "[b][/b]";
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
+    assert_eq!(ast.len(), 1);
+    match &ast[0] {
+        Node::Element(el) => {
+            assert_eq!(el.name, "b");
+            assert!(
+                el.children.is_empty(),
+                "Empty content should produce an empty children list"
+            );
+        }
+        _ => panic!("Expected Element(b) node"),
+    }
+}
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\src\parser\pest_parser.rs
+////////////////////
+use pest::Parser;
+use pest_derive::Parser;
+
+use crate::ast::{Element, Node};
+use crate::error::BbCodeError;
+use crate::options::BbCodeOptions;
+use crate::registry::TagRegistry;
+
+#[derive(Parser)]
+#[grammar = "bbcode.pest"]
+pub struct BBCodeParser;
+
+/// AST構築時のコンテキスト
+struct BuildAstContext<'a> {
+    opts: &'a BbCodeOptions,
+    tag_count: usize,
+}
+
+impl<'a> BuildAstContext<'a> {
+    fn new(opts: &'a BbCodeOptions) -> Self {
+        Self { opts, tag_count: 0 }
+    }
+
+    fn on_tag(&mut self) -> Result<(), BbCodeError> {
+        self.tag_count += 1;
+        if self.tag_count > self.opts.max_tags {
+            return Err(BbCodeError::TagCountExceeded {
+                max_tags: self.opts.max_tags,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_depth(&self, depth: usize, near: &str) -> Result<(), BbCodeError> {
+        if depth >= self.opts.max_depth {
+            return Err(BbCodeError::NestDepthExceeded {
+                max_depth: self.opts.max_depth,
+                near: near.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn build_nodes(
+        &mut self,
+        pair: pest::iterators::Pair<Rule>,
+        depth: usize,
+    ) -> Result<Vec<Node>, BbCodeError> {
+        match pair.as_rule() {
+            Rule::BBCode | Rule::content => {
+                let mut result = vec![];
+                for inner in pair.into_inner() {
+                    result.extend(self.build_nodes(inner, depth)?);
+                }
+                Ok(result)
+            }
+
+            Rule::tag_block => {
+                self.check_depth(depth, pair.as_str())?;
+                self.on_tag()?;
+
+                let original = pair.as_str().to_string(); // フォールバック用
+
+                let mut inner = pair.into_inner();
+
+                let open_name = inner.next().unwrap().as_str().to_string();
+                let open_name_lc = open_name.to_ascii_lowercase();
+
+                // optional: tag_attr (=...)
+                let mut value_attr: Option<String> = None;
+                if let Some(next) = inner.peek() {
+                    if next.as_rule() == Rule::tag_attr {
+                        let raw = inner.next().unwrap().as_str(); // "=xxxx"
+                        value_attr = Some(raw[1..].to_string());
+                    }
+                }
+
+                // children (content*) を close_tag_name まで集める
+                let mut content_pairs = vec![];
+                loop {
+                    match inner.peek() {
+                        Some(p) if p.as_rule() == Rule::close_tag_name => break,
+                        Some(_) => content_pairs.push(inner.next().unwrap()),
+                        None => break,
+                    }
+                }
+
+                let close_name = inner.next().unwrap().as_str().to_string();
+                let close_name_lc = close_name.to_ascii_lowercase();
+
+                // タグ不整合は「その部分を丸ごとテキストへ」(構造を壊さない方針)
+                if open_name_lc != close_name_lc {
+                    return Ok(vec![Node::Text(original)]);
+                }
+
+                // 子要素を再帰で構築
+                let mut children = vec![];
+                for cp in content_pairs {
+                    children.extend(self.build_nodes(cp, depth + 1)?);
+                }
+
+                // TagSpec に従って属性を許可・検証する
+                if let Some(spec) = TagRegistry::get(&open_name_lc) {
+                    // 値属性があるのに許可されてない -> フォールバック
+                    if value_attr.is_some() && !spec.allow_value_attr {
+                        return Ok(vec![Node::Text(original)]);
+                    }
+
+                    // 値属性の検証（colorなど）
+                    if let (Some(val), Some(validator)) = (&value_attr, spec.validate_value_attr) {
+                        if !(validator)(val) {
+                            return Ok(vec![Node::Text(original)]);
+                        }
+                    }
+                }
+                // unknown tag は「Elementとして残す」（Renderer側でどう出すか決められる）
+                let mut elem = Element::new(open_name_lc).with_children(children);
+
+                if let Some(val) = value_attr {
+                    // `[color=red]` を attrs=[("value","red")] に正規化
+                    elem.attrs
+                        .push(("value".to_string(), val.trim().to_string()));
+                }
+
+                Ok(vec![Node::Element(elem)])
+            }
+
+            Rule::escaped_bracket => Ok(vec![Node::Text("[".to_string())]),
+            Rule::text => Ok(vec![Node::Text(pair.as_str().to_string())]),
+            Rule::EOI => Ok(vec![]),
+
+            _ => Ok(vec![Node::Text(pair.as_str().to_string())]),
+        }
+    }
+}
+
+/// 公開API：入力文字列をASTにパース
+pub fn parse_bbcode_to_ast(input: &str, opts: &BbCodeOptions) -> Result<Vec<Node>, BbCodeError> {
+    if input.len() > opts.max_input_size {
+        return Err(BbCodeError::InputSizeExceeded {
+            max_size: opts.max_input_size,
+            actual_size: input.len(),
+        });
+    }
+
+    let pairs = BBCodeParser::parse(Rule::BBCode, input)?;
+    let mut ctx = BuildAstContext::new(opts);
+
+    let mut nodes = vec![];
+    for p in pairs {
+        nodes.extend(ctx.build_nodes(p, 0)?);
+    }
+
+    Ok(normalize_text_nodes(nodes))
+}
+
+/// 隣接 Text をマージして扱いやすくする
+fn normalize_text_nodes(nodes: Vec<Node>) -> Vec<Node> {
+    let mut out: Vec<Node> = Vec::with_capacity(nodes.len());
+
+    for n in nodes {
+        match (out.last_mut(), n) {
+            (Some(Node::Text(prev)), Node::Text(cur)) => prev.push_str(&cur),
+            (_, other) => out.push(other),
+        }
+    }
+
+    out
+}
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\src\render\html.rs
+////////////////////
+use crate::ast::{Element, Node};
+use crate::registry::TagRegistry;
+
+pub fn ast_to_html(nodes: &[Node]) -> String {
+    let mut out = String::new();
+    for n in nodes {
+        render_node(n, &mut out);
+    }
+    out
+}
+
+fn render_node(node: &Node, out: &mut String) {
+    match node {
+        Node::Text(txt) => {
+            let escaped = escape_html(txt);
+            let replaced = replace_newline_with_br(&escaped);
+            out.push_str(&replaced);
+        }
+        Node::Element(el) => render_element(el, out),
+    }
+}
+
+fn render_element(el: &Element, out: &mut String) {
+    // tag spec が無い = unknown tag
+    let Some(_spec) = TagRegistry::get(&el.name) else {
+        // unknown tag: タグ自体は捨てて中身だけ表示
+        for c in &el.children {
+            render_node(c, out);
+        }
+        return;
+    };
+
+    match el.name.as_str() {
+        "b" => {
+            out.push_str("<b>");
+            for c in &el.children {
+                render_node(c, out);
+            }
+            out.push_str("</b>");
+        }
+        "i" => {
+            out.push_str("<i>");
+            for c in &el.children {
+                render_node(c, out);
+            }
+            out.push_str("</i>");
+        }
+        "color" => {
+            // attrs["value"] を探す（parserが正規化済み）
+            let value = el
+                .attrs
+                .iter()
+                .find(|(k, _)| k == "value")
+                .map(|(_, v)| v.as_str());
+
+            // valueが無いならタグを無視して中身だけ（安全寄り）
+            let Some(color_val) = value else {
+                for c in &el.children {
+                    render_node(c, out);
+                }
+                return;
+            };
+
+            // 念のため再検証（render層で二重に守る）
+            if let Some(spec) = TagRegistry::get("color") {
+                if let Some(vfn) = spec.validate_value_attr {
+                    if !vfn(color_val) {
+                        for c in &el.children {
+                            render_node(c, out);
+                        }
+                        return;
+                    }
+                }
+            }
+
+            let escaped_color = escape_html(color_val);
+            out.push_str("<span style=\"color:");
+            out.push_str(&escaped_color);
+            out.push_str("\">");
+            for c in &el.children {
+                render_node(c, out);
+            }
+            out.push_str("</span>");
+        }
+        _ => {
+            // registryで unknown 扱いにしないならここは基本来ない
+            for c in &el.children {
+                render_node(c, out);
+            }
+        }
+    }
+}
+
+fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn replace_newline_with_br(input: &str) -> String {
+    input
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "<br>")
+}
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\src\bbcode.pest
+////////////////////
+BBCode = { SOI ~ content* ~ EOI }
+
+content = { tag_block | escaped_bracket | text }
+
+tag_block = {
+    "[" ~ tag_name ~ tag_attr? ~ "]" ~ content* ~ "[/" ~ close_tag_name ~ "]"
+}
+
+tag_name = @{ (!("=" | "]" | "/" | " " | "\t" | "\n" | "\r") ~ ANY)+ }
+
+close_tag_name = @{ (!("]" | " " | "\t" | "\n" | "\r") ~ ANY)+ }
+
+tag_attr = @{ "=" ~ (!"]" ~ ANY)* }
+
+escaped_bracket = @{ "\\" ~ "[" }
+
+text = @{
+    (!"[" ~ ANY)+
+}
+
+
+////////////////////
+# C:\Users\mikin\DevEnv\RustEnv001\bbcode_parser\Cargo.toml
+////////////////////
+[package]
+name = "bbcode_parser"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bbcode_parser"
+path = "src/lib.rs"
+
+[dependencies]
+pest = "2.8.5"
+pest_derive = "2.8.5"
+regex = "1.12.2"
+thiserror = "2.0.17"
+once_cell = "1.2"
+
