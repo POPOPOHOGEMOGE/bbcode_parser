@@ -41,7 +41,7 @@ fn test_color_invalid() {
     let opts = BbCodeOptions::default();
     let input = "[color=javascript:alert(1)]hack[/color]";
     let ast = parse_bbcode_to_ast(input, &opts).unwrap();
-    // xssが疑われる不正な color は UnknownTag として扱う
+    // xssが疑われる不正な color は Text に fallback
     match &ast[0] {
         Node::Text(raw) => {
             assert!(raw.contains("hack"), "Should contain original text");
@@ -129,7 +129,7 @@ fn test_mismatched_tags() {
     let input = "[b]Hello[/i]";
     let ast = parse_bbcode_to_ast(input, &opts).unwrap();
 
-    // 不整合時はフォールバックで UnknownTag になる
+    // 不整合時はTextにfallback
     assert_eq!(ast.len(), 1);
     match &ast[0] {
         Node::Text(raw) => {
@@ -239,5 +239,19 @@ fn test_pest_parse_error_for_lone_bracket() {
     match result {
         Err(BbCodeError::PestError(_)) => {}
         _ => panic!("Expected PestError for lone '['"),
+    }
+}
+
+#[test]
+fn test_unknown_tag_fallback_to_text() {
+    let opts = BbCodeOptions::default();
+    let input = "[foo]hello [i]world[/i][/foo]";
+
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
+    assert_eq!(ast.len(), 1);
+    match &ast[0] {
+        Node::Text(raw) => assert_eq!(raw, input),
+        _ => panic!("Expected Text fallback for unknown tag"),
     }
 }

@@ -97,6 +97,7 @@ fn escape_html(input: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 fn replace_newline_with_br(input: &str) -> String {

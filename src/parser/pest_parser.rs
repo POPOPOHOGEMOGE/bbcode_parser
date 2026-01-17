@@ -32,7 +32,11 @@ impl<'a> BuildAstContext<'a> {
     }
 
     fn check_depth(&self, depth: usize, near: &str) -> Result<(), BbCodeError> {
-        if depth >= self.opts.max_depth {
+        // depth は 0 起算で渡ってくるので、
+        // 「このタグは何階層目か？」 = depth + 1 として扱う
+        let level = depth.checked_add(1).unwrap_or(usize::MAX);
+
+        if level > self.opts.max_depth {
             return Err(BbCodeError::NestDepthExceeded {
                 max_depth: self.opts.max_depth,
                 near: near.to_string(),
@@ -93,27 +97,34 @@ impl<'a> BuildAstContext<'a> {
                     return Ok(vec![Node::Text(original)]);
                 }
 
+                // TagSpec に従って属性を許可・検証する
+                // unknown tag は BBCode として扱わない
+                let spec = match TagRegistry::get(&open_name_lc) {
+                    Some(s) => s,
+                    None => {
+                        // unknown tag は丸ごとテキストへ（中身も含めて構造化しない）
+                        return Ok(vec![Node::Text(original)]);
+                    }
+                };
+
                 // 子要素を再帰で構築
                 let mut children = vec![];
                 for cp in content_pairs {
                     children.extend(self.build_nodes(cp, depth + 1)?);
                 }
 
-                // TagSpec に従って属性を許可・検証する
-                if let Some(spec) = TagRegistry::get(&open_name_lc) {
-                    // 値属性があるのに許可されてない -> フォールバック
-                    if value_attr.is_some() && !spec.allow_value_attr {
+                // 値属性があるのに許可されてない -> フォールバック
+                if value_attr.is_some() && !spec.allow_value_attr {
+                    return Ok(vec![Node::Text(original)]);
+                }
+
+                // 値属性の検証（colorなど）
+                if let (Some(val), Some(validator)) = (&value_attr, spec.validate_value_attr) {
+                    if !(validator)(val) {
                         return Ok(vec![Node::Text(original)]);
                     }
-
-                    // 値属性の検証（colorなど）
-                    if let (Some(val), Some(validator)) = (&value_attr, spec.validate_value_attr) {
-                        if !(validator)(val) {
-                            return Ok(vec![Node::Text(original)]);
-                        }
-                    }
                 }
-                // unknown tag は「Elementとして残す」（Renderer側でどう出すか決められる）
+
                 let mut elem = Element::new(open_name_lc).with_children(children);
 
                 if let Some(val) = value_attr {
@@ -163,9 +174,22 @@ pub fn parse_bbcode_to_ast(input: &str, opts: &BbCodeOptions) -> Result<Vec<Node
 
 /// 隣接 Text をマージして扱いやすくする
 fn normalize_text_nodes(nodes: Vec<Node>) -> Vec<Node> {
-    let mut out: Vec<Node> = Vec::with_capacity(nodes.len());
+    // まず子要素を再帰的に normalize
+    let mut normalized: Vec<Node> = Vec::with_capacity(nodes.len());
 
     for n in nodes {
+        match n {
+            Node::Text(_) => normalized.push(n),
+            Node::Element(mut el) => {
+                el.children = normalize_text_nodes(el.children);
+                normalized.push(Node::Element(el));
+            }
+        }
+    }
+
+    // 次に、この階層で隣接Textをマージ
+    let mut out: Vec<Node> = Vec::with_capacity(normalized.len());
+    for n in normalized {
         match (out.last_mut(), n) {
             (Some(Node::Text(prev)), Node::Text(cur)) => prev.push_str(&cur),
             (_, other) => out.push(other),
