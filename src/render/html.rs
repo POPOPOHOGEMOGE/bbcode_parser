@@ -11,8 +11,8 @@ pub fn ast_to_html(nodes: &[Node]) -> String {
 
 fn render_node(node: &Node, out: &mut String) {
     match node {
-        Node::Text(txt) => {
-            let escaped = escape_html(txt);
+        Node::Text { text, .. } => {
+            let escaped = escape_html(text);
             let replaced = replace_newline_with_br(&escaped);
             out.push_str(&replaced);
         }

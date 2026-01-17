@@ -1,19 +1,27 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
-    Text(String),
+    Text { span: Span, text: String },
     Element(Element),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Element {
+    pub span: Span,
     pub name: String,
     pub attrs: Vec<(String, String)>,
     pub children: Vec<Node>,
 }
 
 impl Element {
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
         Self {
+            span,
             name: name.into(),
             attrs: vec![],
             children: vec![],

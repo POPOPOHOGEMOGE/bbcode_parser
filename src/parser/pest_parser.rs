@@ -1,7 +1,7 @@
 use pest::Parser;
 use pest_derive::Parser;
 
-use crate::ast::{Element, Node};
+use crate::ast::{Element, Node, Span};
 use crate::error::BbCodeError;
 use crate::options::BbCodeOptions;
 use crate::registry::TagRegistry;
@@ -31,15 +31,24 @@ impl<'a> BuildAstContext<'a> {
         Ok(())
     }
 
-    fn check_depth(&self, depth: usize, near: &str) -> Result<(), BbCodeError> {
-        // depth は 0 起算で渡ってくるので、
-        // 「このタグは何階層目か？」 = depth + 1 として扱う
+    fn check_depth(
+        &self,
+        depth: usize,
+        pair: &pest::iterators::Pair<Rule>,
+    ) -> Result<(), BbCodeError> {
         let level = depth.checked_add(1).unwrap_or(usize::MAX);
-
         if level > self.opts.max_depth {
+            let sp = pair.as_span();
+            let (line, column) = sp.start_pos().line_col();
             return Err(BbCodeError::NestDepthExceeded {
                 max_depth: self.opts.max_depth,
-                near: near.to_string(),
+                near: pair.as_str().to_string(),
+                span: Span {
+                    start: sp.start(),
+                    end: sp.end(),
+                },
+                line,
+                column,
             });
         }
         Ok(())
@@ -60,8 +69,10 @@ impl<'a> BuildAstContext<'a> {
             }
 
             Rule::tag_block => {
-                self.check_depth(depth, pair.as_str())?;
+                self.check_depth(depth, &pair)?;
                 self.on_tag()?;
+
+                let span = pair_span(&pair);
 
                 let original = pair.as_str().to_string(); // フォールバック用
 
@@ -94,7 +105,10 @@ impl<'a> BuildAstContext<'a> {
 
                 // タグ不整合は「その部分を丸ごとテキストへ」(構造を壊さない方針)
                 if open_name_lc != close_name_lc {
-                    return Ok(vec![Node::Text(original)]);
+                    return Ok(vec![Node::Text {
+                        span,
+                        text: original,
+                    }]);
                 }
 
                 // TagSpec に従って属性を許可・検証する
@@ -103,7 +117,10 @@ impl<'a> BuildAstContext<'a> {
                     Some(s) => s,
                     None => {
                         // unknown tag は丸ごとテキストへ（中身も含めて構造化しない）
-                        return Ok(vec![Node::Text(original)]);
+                        return Ok(vec![Node::Text {
+                            span,
+                            text: original,
+                        }]);
                     }
                 };
 
@@ -115,17 +132,23 @@ impl<'a> BuildAstContext<'a> {
 
                 // 値属性があるのに許可されてない -> フォールバック
                 if value_attr.is_some() && !spec.allow_value_attr {
-                    return Ok(vec![Node::Text(original)]);
+                    return Ok(vec![Node::Text {
+                        span,
+                        text: original,
+                    }]);
                 }
 
                 // 値属性の検証（colorなど）
                 if let (Some(val), Some(validator)) = (&value_attr, spec.validate_value_attr) {
                     if !(validator)(val) {
-                        return Ok(vec![Node::Text(original)]);
+                        return Ok(vec![Node::Text {
+                            span,
+                            text: original,
+                        }]);
                     }
                 }
 
-                let mut elem = Element::new(open_name_lc).with_children(children);
+                let mut elem = Element::new(open_name_lc, span).with_children(children);
 
                 if let Some(val) = value_attr {
                     // `[color=red]` を attrs=[("value","red")] に正規化
@@ -140,14 +163,37 @@ impl<'a> BuildAstContext<'a> {
                 // 開始タグのみで閉じタグがないケースはその部分を丸ごとテキストへ
                 // DoS耐性としてタグ数制限の対象に含める
                 self.on_tag()?;
-                Ok(vec![Node::Text(pair.as_str().to_string())])
+                let span = pair_span(&pair);
+                Ok(vec![Node::Text {
+                    span,
+                    text: pair.as_str().to_string(),
+                }])
             }
 
-            Rule::escaped_bracket => Ok(vec![Node::Text("[".to_string())]),
-            Rule::text => Ok(vec![Node::Text(pair.as_str().to_string())]),
+            Rule::escaped_bracket => {
+                let span = pair_span(&pair);
+                Ok(vec![Node::Text {
+                    span,
+                    text: "[".to_string(),
+                }])
+            }
+
+            Rule::text => {
+                let span = pair_span(&pair);
+                Ok(vec![Node::Text {
+                    span,
+                    text: pair.as_str().to_string(),
+                }])
+            }
             Rule::EOI => Ok(vec![]),
 
-            _ => Ok(vec![Node::Text(pair.as_str().to_string())]),
+            _ => {
+                let span = pair_span(&pair);
+                Ok(vec![Node::Text {
+                    span,
+                    text: pair.as_str().to_string(),
+                }])
+            }
         }
     }
 }
@@ -174,12 +220,11 @@ pub fn parse_bbcode_to_ast(input: &str, opts: &BbCodeOptions) -> Result<Vec<Node
 
 /// 隣接 Text をマージして扱いやすくする
 fn normalize_text_nodes(nodes: Vec<Node>) -> Vec<Node> {
-    // まず子要素を再帰的に normalize
     let mut normalized: Vec<Node> = Vec::with_capacity(nodes.len());
 
     for n in nodes {
         match n {
-            Node::Text(_) => normalized.push(n),
+            Node::Text { .. } => normalized.push(n),
             Node::Element(mut el) => {
                 el.children = normalize_text_nodes(el.children);
                 normalized.push(Node::Element(el));
@@ -187,14 +232,33 @@ fn normalize_text_nodes(nodes: Vec<Node>) -> Vec<Node> {
         }
     }
 
-    // 次に、この階層で隣接Textをマージ
     let mut out: Vec<Node> = Vec::with_capacity(normalized.len());
     for n in normalized {
         match (out.last_mut(), n) {
-            (Some(Node::Text(prev)), Node::Text(cur)) => prev.push_str(&cur),
+            (
+                Some(Node::Text {
+                    span: prev_span,
+                    text: prev_text,
+                }),
+                Node::Text {
+                    span: cur_span,
+                    text: cur_text,
+                },
+            ) => {
+                prev_text.push_str(&cur_text);
+                prev_span.end = cur_span.end;
+            }
             (_, other) => out.push(other),
         }
     }
 
     out
+}
+
+fn pair_span(pair: &pest::iterators::Pair<Rule>) -> Span {
+    let sp = pair.as_span();
+    Span {
+        start: sp.start(),
+        end: sp.end(),
+    }
 }

@@ -1,5 +1,12 @@
 use bbcode_parser::{ast_to_html, parse_bbcode_to_ast, BbCodeError, BbCodeOptions, Node};
 
+fn assert_text(node: &Node, expected: &str) {
+    match node {
+        Node::Text { text, .. } => assert_eq!(text, expected),
+        _ => panic!("Expected Text node"),
+    }
+}
+
 #[test]
 fn test_basic_parse() {
     let opts = BbCodeOptions::default();
@@ -11,7 +18,7 @@ fn test_basic_parse() {
         Node::Element(el) => {
             assert_eq!(el.name, "b");
             assert_eq!(el.children.len(), 1);
-            assert_eq!(el.children[0], Node::Text("Bold".to_string()));
+            assert_text(&el.children[0], "Bold");
         }
         _ => panic!("Expected Bold node"),
     }
@@ -41,16 +48,21 @@ fn test_color_invalid() {
     let opts = BbCodeOptions::default();
     let input = "[color=javascript:alert(1)]hack[/color]";
     let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
     // xssが疑われる不正な color は Text に fallback
     match &ast[0] {
-        Node::Text(raw) => {
+        Node::Text { text: raw, span } => {
             assert!(raw.contains("hack"), "Should contain original text");
             assert!(
                 raw.contains("javascript"),
                 "Should keep original invalid value"
             );
+
+            // fallbackなのでブロック全体を指すのが自然
+            assert_eq!(span.start, 0);
+            assert_eq!(span.end, input.len());
         }
-        _ => panic!("Expected UnknownTag for invalid color"),
+        _ => panic!("Expected Text fallback for invalid color"),
     }
 }
 
@@ -65,13 +77,22 @@ fn test_nest_depth_exceeded() {
     let result = parse_bbcode_to_ast(input, &opts);
 
     match result {
-        Err(BbCodeError::NestDepthExceeded { max_depth, near }) => {
+        Err(BbCodeError::NestDepthExceeded {
+            max_depth,
+            near,
+            span,
+            line,
+            column,
+        }) => {
             assert_eq!(max_depth, 2);
             // どのタグ付近で落ちたかは実装依存になり得るので、最低限の確認に留める
             assert!(
                 near.contains("["),
                 "near should contain some tag-related snippet"
             );
+            assert_eq!(line, 1);
+            assert_eq!(column, 7);
+            assert_eq!(span.start, 6);
         }
         _ => panic!("Expected NestDepthExceeded error"),
     }
@@ -132,12 +153,15 @@ fn test_mismatched_tags() {
     // 不整合時はTextにfallback
     assert_eq!(ast.len(), 1);
     match &ast[0] {
-        Node::Text(raw) => {
+        Node::Text { text: raw, span } => {
             assert!(raw.contains("Hello"));
             assert!(raw.contains("[b]"));
             assert!(raw.contains("[/i]"));
+
+            assert_eq!(span.start, 0);
+            assert_eq!(span.end, input.len());
         }
-        _ => panic!("Expected UnknownTag for mismatched tags"),
+        _ => panic!("Expected Text fallback for mismatched tags"),
     }
 }
 
@@ -149,10 +173,7 @@ fn test_newline_to_br() {
 
     // ASTは 1ノード (Text("Hello\nWorld"))
     assert_eq!(ast.len(), 1);
-    match &ast[0] {
-        Node::Text(txt) => assert_eq!(txt, "Hello\nWorld"),
-        _ => panic!("Expected a single Text node"),
-    }
+    assert_text(&ast[0], "Hello\nWorld");
 
     // HTML化すると改行が <br> に
     let html = ast_to_html(&ast);
@@ -169,7 +190,13 @@ fn test_unclosed_tag_fallback() {
     // normalize_text_nodes があるので 1ノードにまとまる
     assert_eq!(ast.len(), 1);
     match &ast[0] {
-        Node::Text(raw) => assert_eq!(raw, input),
+        Node::Text { text: raw, span } => {
+            assert_eq!(raw, input);
+
+            // "[b]" と後続テキストがマージされるので、全体spanになっているのが自然
+            assert_eq!(span.start, 0);
+            assert_eq!(span.end, input.len());
+        }
         _ => panic!("Expected Text fallback for unclosed tag"),
     }
 }
@@ -201,8 +228,9 @@ fn test_color_hash_six_digits() {
             assert_eq!(el.attrs[0].0, "value");
             assert_eq!(el.attrs[0].1, "#123ABC");
             assert_eq!(el.children.len(), 1);
+
             match &el.children[0] {
-                Node::Text(txt) => assert_eq!(txt, "Test"),
+                Node::Text { text: txt, .. } => assert_eq!(txt, "Test"),
                 _ => panic!("Expected Text inside color"),
             }
         }
@@ -251,7 +279,101 @@ fn test_unknown_tag_fallback_to_text() {
 
     assert_eq!(ast.len(), 1);
     match &ast[0] {
-        Node::Text(raw) => assert_eq!(raw, input),
+        Node::Text { text: raw, span } => {
+            assert_eq!(raw, input);
+            assert_eq!(span.start, 0);
+            assert_eq!(span.end, input.len());
+        }
         _ => panic!("Expected Text fallback for unknown tag"),
+    }
+}
+
+#[test]
+fn test_text_span_simple() {
+    let opts = BbCodeOptions::default();
+    let input = "Hello";
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
+    assert_eq!(ast.len(), 1);
+    match &ast[0] {
+        Node::Text { span, text } => {
+            assert_eq!(text, "Hello");
+            assert_eq!(span.start, 0);
+            assert_eq!(span.end, 5);
+        }
+        _ => panic!("Expected Text node"),
+    }
+}
+
+#[test]
+fn test_element_and_child_span() {
+    let opts = BbCodeOptions::default();
+    let input = "[b]Bold[/b]";
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
+    assert_eq!(ast.len(), 1);
+    match &ast[0] {
+        Node::Element(el) => {
+            assert_eq!(el.name, "b");
+            assert_eq!(el.span.start, 0);
+            assert_eq!(el.span.end, input.len());
+
+            assert_eq!(el.children.len(), 1);
+            match &el.children[0] {
+                Node::Text { span, text } => {
+                    assert_eq!(text, "Bold");
+                    assert_eq!(span.start, 3); // "[b]" の直後
+                    assert_eq!(span.end, 7); // "Bold" の終端
+                }
+                _ => panic!("Expected Text child"),
+            }
+        }
+        _ => panic!("Expected Element node"),
+    }
+}
+
+#[test]
+fn test_fallback_text_span_is_whole_block() {
+    let opts = BbCodeOptions::default();
+    let input = "[b]Hello[/i]";
+    let ast = parse_bbcode_to_ast(input, &opts).unwrap();
+
+    assert_eq!(ast.len(), 1);
+    match &ast[0] {
+        Node::Text { span, text } => {
+            assert_eq!(text, input);
+            assert_eq!(span.start, 0);
+            assert_eq!(span.end, input.len());
+        }
+        _ => panic!("Expected Text fallback"),
+    }
+}
+
+#[test]
+fn test_nest_depth_exceeded_linecol_with_japanese() {
+    let opts = BbCodeOptions {
+        max_depth: 2,
+        ..Default::default()
+    };
+
+    // 先頭に日本語1文字（UTF-8で3バイト）
+    // 3階層目の [color...] で落ちる
+    let input = "あ[b][i][color=red]x[/color][/i][/b]";
+    let result = parse_bbcode_to_ast(input, &opts);
+
+    match result {
+        Err(BbCodeError::NestDepthExceeded {
+            span, line, column, ..
+        }) => {
+            // 行は1行目
+            assert_eq!(line, 1);
+
+            // "あ[b]" で4列、"[i]" が3列増えて7列、次の "[" が8列目
+            assert_eq!(column, 8);
+
+            // "[b]"(3byte) + "[i]"(3byte) で9byte目
+            assert_eq!(span.start, 9);
+        }
+        _ => panic!("Expected NestDepthExceeded error"),
     }
 }
