@@ -45,6 +45,48 @@ fn render_element(el: &Element, out: &mut String) {
             }
             out.push_str("</i>");
         }
+        "u" => {
+            out.push_str("<u>");
+            for c in &el.children {
+                render_node(c, out);
+            }
+            out.push_str("</u>");
+        }
+        "s" => {
+            out.push_str("<s>");
+            for c in &el.children {
+                render_node(c, out);
+            }
+            out.push_str("</s>");
+        }
+        "quote" => {
+            out.push_str("<blockquote>");
+            for c in &el.children {
+                render_node(c, out);
+            }
+            out.push_str("</blockquote>");
+        }
+        "left" => {
+            out.push_str("<div style=\"text-align:left\">");
+            for c in &el.children {
+                render_node(c, out);
+            }
+            out.push_str("</div>");
+        }
+        "center" => {
+            out.push_str("<div style=\"text-align:center\">");
+            for c in &el.children {
+                render_node(c, out);
+            }
+            out.push_str("</div>");
+        }
+        "right" => {
+            out.push_str("<div style=\"text-align:right\">");
+            for c in &el.children {
+                render_node(c, out);
+            }
+            out.push_str("</div>");
+        }
         "color" => {
             // attrs["value"] を探す（parserが正規化済み）
             let value = el
@@ -53,7 +95,7 @@ fn render_element(el: &Element, out: &mut String) {
                 .find(|(k, _)| k == "value")
                 .map(|(_, v)| v.as_str());
 
-            // valueが無いならタグを無視して中身だけ（安全寄り）
+            // valueが無いならタグを無視して中身だけ
             let Some(color_val) = value else {
                 for c in &el.children {
                     render_node(c, out);

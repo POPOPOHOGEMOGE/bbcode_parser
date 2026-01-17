@@ -22,11 +22,17 @@ impl TagSpec {
 pub struct TagRegistry;
 
 impl TagRegistry {
-    /// “このタグは何か？”（仕様）を返す
+    /// タグの仕様を返す
     pub fn get(tag_name: &str) -> Option<TagSpec> {
         match tag_name.to_ascii_lowercase().as_str() {
             "b" => Some(TagSpec::simple()),
             "i" => Some(TagSpec::simple()),
+            "u" => Some(TagSpec::simple()),
+            "s" => Some(TagSpec::simple()),
+            "quote" => Some(TagSpec::simple()),
+            "left" => Some(TagSpec::simple()),
+            "center" => Some(TagSpec::simple()),
+            "right" => Some(TagSpec::simple()),
             "color" => Some(TagSpec {
                 allow_value_attr: true,
                 validate_value_attr: Some(is_valid_color_value),
