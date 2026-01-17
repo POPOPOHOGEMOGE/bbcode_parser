@@ -154,7 +154,7 @@ pub fn parse_bbcode_to_ast(input: &str, opts: &BbCodeOptions) -> Result<Vec<Node
     Ok(normalize_text_nodes(nodes))
 }
 
-/// 隣接 Text をマージして扱いやすくする（地味に効く）
+/// 隣接 Text をマージして扱いやすくする
 fn normalize_text_nodes(nodes: Vec<Node>) -> Vec<Node> {
     let mut out: Vec<Node> = Vec::with_capacity(nodes.len());
 

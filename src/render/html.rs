@@ -23,7 +23,7 @@ fn render_node(node: &Node, out: &mut String) {
 fn render_element(el: &Element, out: &mut String) {
     // tag spec が無い = unknown tag
     let Some(_spec) = TagRegistry::get(&el.name) else {
-        // unknown tag: タグ自体は捨てて中身だけ表示（掲示板的な “無害化”）
+        // unknown tag: タグ自体は捨てて中身だけ表示
         for c in &el.children {
             render_node(c, out);
         }

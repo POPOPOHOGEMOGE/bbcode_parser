@@ -36,7 +36,7 @@ impl TagRegistry {
     }
 }
 
-/// 本当に欲しいのは「英字 or #RGB or #RRGGBB」
+/// 英字 or #RGB or #RRGGBB
 fn is_valid_color_value(s: &str) -> bool {
     static COLOR_RE: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"^([A-Za-z]+|#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?)$")
