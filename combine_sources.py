@@ -8,7 +8,7 @@ OUTPUT = Path("combined.txt")
 if OUTPUT.exists():
     OUTPUT.unlink()
 
-print("[+] Collecting .gd / .tscn files...")
+print("[+] Collecting .rs / .pest files...")
 
 rs_files   = [f for f in Path(".").rglob("*.rs") if "target" not in f.parts]
 pest_files = [f for f in Path(".").rglob("*.pest") if "addons" not in f.parts]
